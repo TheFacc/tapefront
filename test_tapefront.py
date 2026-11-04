@@ -90,6 +90,24 @@ class LiveLinesTest(unittest.TestCase):
         b.update("We need fifty people.", 3.0)
         self.assertEqual(b.update("We need fifty people.", 4.5), (3.0, "people."))
 
+    def test_revision_does_not_replay_later_sentences(self):
+        b = tf.LiveLines(idle=1.5)
+        text = "We need fifteen people. The budget is approved. Next topic"
+        b.update(text, 1.0)
+        b.update(text, 2.5)
+        text = text.replace("fifteen", "fifty") + " is hiring."
+        b.update(text, 3.0)
+        self.assertEqual(b.update(text, 4.5), (3.0, "is hiring."))
+
+    def test_revision_without_spaces_does_not_suppress_text(self):
+        b = tf.LiveLines(idle=1.5)
+        b.update("今天我们开会", 1.0)
+        self.assertEqual(b.update("今天我们开会", 2.5), (1.0, "今天我们开会"))
+        b.update("今天咱们开会讨论预算", 3.0)
+        self.assertEqual(b.update("今天咱们开会讨论预算", 4.5), (3.0, "讨论预算"))
+        b.update("今天咱们开会讨论预算。明天继续。", 5.0)
+        self.assertEqual(b.update("今天咱们开会讨论预算。明天继续。", 6.5), (5.0, "明天继续。"))
+
     def test_decimal_after_idle_flush_keeps_its_point(self):
         b = tf.LiveLines(idle=1.5)
         b.update("It costs 3", 1.0)

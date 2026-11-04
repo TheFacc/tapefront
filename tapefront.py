@@ -95,8 +95,10 @@ class LiveLines:
     live view follows `full`. `written` is the part of `full` already turned
     into lines; the pending text after it is recomputed on every update, so a
     revision inside it needs no special handling. If a revision reaches into
-    written text, pending text resumes at the first word boundary after the
-    common prefix: at worst one word is lost or repeated, never half a word.
+    written text, pending text resumes where the end of the written text shows
+    up again in the revised one, else at the next word boundary after the
+    revision point: a revised word may be skipped or repeated, but later
+    sentences are neither replayed nor lost.
 
     A line ends at a sentence end once text follows it (so "3." can still
     become "3.5"), after `idle` seconds without change (all pending text), or
@@ -133,10 +135,17 @@ class LiveLines:
         if full.startswith(self.written):
             return len(self.written)
         n = len(os.path.commonprefix([self.written, full]))
-        if n == len(full) or full[n].isspace():
-            return n
+        # The written text after the revision point was already emitted: resume
+        # after the longest tail of it (3+ chars, last 40 only) found again.
+        tail = self.written[n:][-40:]
+        for i in range(len(tail) - 2):
+            j = full.find(tail[i:], n)
+            if j >= 0:
+                return j + len(tail) - i
+        # Not found: resume at the next word boundary, or at the revision
+        # point when there is none (CJK), so text may repeat but is never lost.
         m = re.compile(r"\s").search(full, n)
-        return m.start() if m else len(full)
+        return m.start() if m else n
 
     def _cut(self, pending, now, final):
         """How many chars of `pending` make a finished line (0 = none yet)."""
