@@ -1,7 +1,10 @@
 import datetime
 import os
 import tempfile
+import json
+import subprocess
 import unittest
+from unittest import mock
 
 import tapefront as tf
 
@@ -168,6 +171,36 @@ class WhisperTest(unittest.TestCase):
 
     def test_empty_json(self):
         self.assertEqual(tf.parse_whisper_json({}, "me"), [])
+
+    def test_attempts_order(self):
+        self.assertEqual(tf.whisper_attempts(["full", "q5"], 1),
+                         [("full", 1), ("q5", 1), ("q5", None)])
+        self.assertEqual(tf.whisper_attempts(["mine"], 0), [("mine", 0), ("mine", None)])
+
+    def test_failed_attempts_are_dropped_for_the_next_channel(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            if "full" in cmd:  # the full model never fits
+                return subprocess.CompletedProcess(cmd, 1, stderr="ErrorOutOfDeviceMemory")
+            with open(cmd[cmd.index("-of") + 1] + ".json", "w") as f:
+                json.dump({"transcription": []}, f)
+            return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+        attempts = tf.whisper_attempts(["full", "q5"], 1)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(tf.subprocess, "run", fake_run), \
+                mock.patch.object(tf, "warn"), mock.patch("builtins.print"):
+            tf.whisper(attempts, "vad", "a.wav", os.path.join(d, "me"))
+            tf.whisper(attempts, "vad", "b.wav", os.path.join(d, "them"))
+        self.assertEqual([c[c.index("-m") + 1] for c in calls], ["full", "q5", "q5"])
+        self.assertEqual(attempts, [("q5", 1), ("q5", None)])
+
+    def test_last_attempt_failing_exits(self):
+        fail = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stderr="boom")
+        with mock.patch.object(tf.subprocess, "run", fail), mock.patch.object(tf, "warn"), \
+                mock.patch("builtins.print"), self.assertRaises(SystemExit):
+            tf.whisper(tf.whisper_attempts(["q5"], 1), "vad", "a.wav", "/nonexistent/x")
 
 
 class SessionDirTest(unittest.TestCase):

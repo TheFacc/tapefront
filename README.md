@@ -33,12 +33,20 @@ Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest
 - **Live**: a separate worker process runs a second ffmpeg (16 kHz) and streams each channel through
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) with the Nemotron streaming model that
   [Handy](https://handy.computer) already downloads. If the worker crashes, recording continues.
-- **Final**: each channel is extracted and transcribed with `whisper-cli` (large-v3 q5_0 by default, Silero VAD to
-  skip silences), on the GPU with a CPU retry, then merged into `transcript.md`.
+- **Final**: each channel is extracted and transcribed with `whisper-cli` (Silero VAD to skip silences), then merged
+  into `transcript.md`. Models are tried in order: full large-v3 on the GPU, large-v3 q5_0 on the GPU (fits when
+  something else holds most of the VRAM), then q5_0 on the CPU. A try that fails is skipped for the second channel
+  too. `--model PATH` uses only that model: GPU, then CPU.
 
-Models are not downloaded at runtime: the live model comes from Handy's cache
-(`~/.cache/huggingface/hub/models--handy-computer--nemotron-3.5-asr-streaming-0.6b-gguf`), the whisper model from
-`~/.cache/nix-transcribe/ggml-large-v3-q5_0.bin` unless `--model` says otherwise.
+Models are not downloaded at runtime. The live model comes from Handy's cache
+(`~/.cache/huggingface/hub/models--handy-computer--nemotron-3.5-asr-streaming-0.6b-gguf`). The whisper models live
+in `~/.cache/nix-transcribe/`; either one is enough, missing ones are skipped:
+
+```sh
+cd ~/.cache/nix-transcribe
+curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin       # 3.1 GB, ~4 GB VRAM
+curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin  # 1.1 GB
+```
 
 ## Nix
 

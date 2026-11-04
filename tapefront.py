@@ -27,7 +27,10 @@ LIVE_MODEL_GLOB = (
     "~/.cache/huggingface/hub/models--handy-computer--nemotron-3.5-asr-streaming-0.6b-gguf"
     "/snapshots/*/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"
 )
-FINAL_MODEL = "~/.cache/nix-transcribe/ggml-large-v3-q5_0.bin"
+# Default whisper models, best first: full large-v3 when it fits on the GPU,
+# else q5_0 (fits beside other GPU users). Missing ones are skipped.
+FINAL_MODELS = ("~/.cache/nix-transcribe/ggml-large-v3.bin",
+                "~/.cache/nix-transcribe/ggml-large-v3-q5_0.bin")
 VAD_MODEL_ENV = "TAPEFRONT_VAD_MODEL"  # set by the Nix wrapper
 SENTENCE_END = re.compile(r"[.?!](?=\s|$)|[。？！]")
 # Whitespace, or punctuation not starting a number (".5", ",000"), that must
@@ -175,6 +178,12 @@ def parse_whisper_json(data, speaker):
         if text:
             out.append((seg["offsets"]["from"] / 1000, speaker, text))
     return out
+
+
+def whisper_attempts(models, device):
+    """(model, GPU device or None for CPU) tries in order: each model on the
+    GPU, then the last (smallest) one on the CPU."""
+    return [(m, device) for m in models] + [(models[-1], None)]
 
 
 def merge_segments(*channels):
@@ -392,18 +401,43 @@ def flac_header(flac):
     return header(tags.get("title"), tags.get("date", "unknown"))
 
 
-def whisper(model, vad, wav, base, device):
-    # VAD skips long silences, where whisper would otherwise hallucinate.
-    cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-oj", "-of", base, "--vad", "-vm", vad]
-    run = dict(stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, preexec_fn=_die_with_parent)
-    res = subprocess.run(cmd + ["-dev", str(device)], **run)
-    if res.returncode != 0:
-        warn(f"whisper-cli failed on GPU device {device}:\n{res.stderr[-1500:]}\nretrying on CPU (-ng)")
-        res = subprocess.run(cmd + ["-ng"], **run)
-        if res.returncode != 0:
+def whisper(attempts, vad, wav, base):
+    """Run whisper-cli down the `attempts` list until one works. Failed tries
+    are dropped from the list, so the next channel starts where this one ended."""
+    while True:
+        model, dev = attempts[0]
+        where = "CPU" if dev is None else f"GPU {dev}"
+        print(f"  {os.path.basename(model)} on {where}", flush=True)
+        # VAD skips long silences, where whisper would otherwise hallucinate.
+        cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-oj", "-of", base, "--vad", "-vm", vad]
+        cmd += ["-ng"] if dev is None else ["-dev", str(dev)]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                             preexec_fn=_die_with_parent)
+        if res.returncode == 0:
+            break
+        if len(attempts) == 1:
             raise SystemExit(f"tapefront: whisper-cli failed:\n{res.stderr[-1500:]}")
+        warn(f"whisper-cli failed ({os.path.basename(model)} on {where}):\n{res.stderr[-1500:]}")
+        attempts.pop(0)
     with open(base + ".json", encoding="utf-8", errors="replace") as f:
         return json.load(f)
+
+
+def final_models(model):
+    """The whisper models to try: --model alone, else the defaults on disk."""
+    if model:
+        model = os.path.expanduser(model)
+        if not os.path.isfile(model):
+            raise SystemExit(f"tapefront: whisper model not found: {model}")
+        return [model]
+    paths = [os.path.expanduser(m) for m in FINAL_MODELS]
+    found = [m for m in paths if os.path.isfile(m)]
+    if not found:
+        raise SystemExit("tapefront: no whisper model found; download one (see README) to "
+                         + " or ".join(paths) + ", or pass --model PATH")
+    if paths[0] not in found:
+        warn(f"full large-v3 not found at {paths[0]} (see README), using {os.path.basename(found[0])}")
+    return found
 
 
 def final(sdir, model, device):
@@ -411,9 +445,7 @@ def final(sdir, model, device):
     flac = os.path.join(sdir, "audio.flac")
     if not os.path.isfile(flac):
         raise SystemExit(f"tapefront: no audio.flac in {sdir}")
-    model = os.path.expanduser(model)
-    if not os.path.isfile(model):
-        raise SystemExit(f"tapefront: whisper model not found: {model} (pass --model PATH)")
+    attempts = whisper_attempts(final_models(model), device)
     vad = os.environ.get(VAD_MODEL_ENV)
     if not vad or not os.path.isfile(vad):
         raise SystemExit(f"tapefront: Silero VAD model not found: set {VAD_MODEL_ENV} "
@@ -429,24 +461,25 @@ def final(sdir, model, device):
                  "-af", f"pan=mono|c0=c{ch}", "-ar", "16000", wav],
                 check=True, preexec_fn=_die_with_parent,
             )
-            data = whisper(model, vad, wav, os.path.join(tmp, speaker), device)
+            data = whisper(attempts, vad, wav, os.path.join(tmp, speaker))
             channels.append(parse_whisper_json(data, speaker))
 
     lines = [flac_header(flac), ""]
     lines += [format_line(t, spk, text) for t, spk, text in merge_segments(*channels)]
-    path = os.path.join(sdir, "transcript.md")
-    part = f"{path}.{os.getpid()}.tmp"  # unique per run (not NamedTemporaryFile: that would be 0600)
+    out = os.path.join(sdir, "transcript.md")
+    part = f"{out}.{os.getpid()}.tmp"  # unique per run (not NamedTemporaryFile: that would be 0600)
     with open(part, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    os.replace(part, path)
-    print(f"Transcript: {path}", flush=True)
+    os.replace(part, out)
+    print(f"Transcript: {out}", flush=True)
     return 0
 
 
 # --- CLI ----------------------------------------------------------------
 
 def add_final_opts(p):
-    p.add_argument("--model", default=FINAL_MODEL, help=f"whisper ggml model (default {FINAL_MODEL})")
+    p.add_argument("--model", help="whisper ggml model (default: full large-v3, else q5_0, "
+                                   "from ~/.cache/nix-transcribe)")
     p.add_argument("--device", type=int, default=1, help="whisper GPU device index (default 1)")
 
 
