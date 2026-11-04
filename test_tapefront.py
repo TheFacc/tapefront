@@ -18,6 +18,7 @@ class TimestampTest(unittest.TestCase):
 
     def test_line_and_header(self):
         self.assertEqual(tf.format_line(725, "me", "hello"), "[00:12:05] me: hello")
+        self.assertEqual(tf.format_line(725, None, "hello"), "[00:12:05] hello")
         self.assertEqual(tf.header(None, "2026-11-04 10:00:00"),
                          "# Meeting — started 2026-11-04 10:00:00 (local)")
         self.assertEqual(tf.header("Standup", "x"), "# Standup — started x (local)")
@@ -176,6 +177,9 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual(tf.whisper_attempts(["full", "q5"], 1),
                          [("full", 1), ("q5", 1), ("q5", None)])
         self.assertEqual(tf.whisper_attempts(["mine"], 0), [("mine", 0), ("mine", None)])
+
+    def test_file_transcript_path(self):
+        self.assertEqual(tf.file_transcript_path("/r/call.m4a"), "/r/call.m4a.transcript.md")
 
     def test_failed_attempts_are_dropped_for_the_next_channel(self):
         calls = []

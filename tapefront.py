@@ -50,7 +50,7 @@ def fmt_ts(seconds):
 
 
 def format_line(seconds, speaker, text):
-    return f"[{fmt_ts(seconds)}] {speaker}: {text}"
+    return f"[{fmt_ts(seconds)}] {speaker + ': ' if speaker else ''}{text}"
 
 
 def header(title, started):
@@ -184,6 +184,11 @@ def whisper_attempts(models, device):
     """(model, GPU device or None for CPU) tries in order: each model on the
     GPU, then the last (smallest) one on the CPU."""
     return [(m, device) for m in models] + [(models[-1], None)]
+
+
+def file_transcript_path(path):
+    """meeting.m4a -> meeting.m4a.transcript.md (never clashes with notes)."""
+    return path + ".transcript.md"
 
 
 def merge_segments(*channels):
@@ -440,11 +445,21 @@ def final_models(model):
     return found
 
 
-def final(sdir, model, device):
-    sdir = os.path.abspath(sdir)
-    flac = os.path.join(sdir, "audio.flac")
-    if not os.path.isfile(flac):
-        raise SystemExit(f"tapefront: no audio.flac in {sdir}")
+def final(path, model, device):
+    """Final transcript of a session dir (per channel, me/them) or of any
+    audio/video file (downmixed to mono, no speaker labels)."""
+    path = os.path.abspath(path)
+    if os.path.isdir(path):
+        src = os.path.join(path, "audio.flac")
+        if not os.path.isfile(src):
+            raise SystemExit(f"tapefront: no audio.flac in {path}")
+        out, head = os.path.join(path, "transcript.md"), flac_header(src)
+        tracks = [(speaker, ["-af", f"pan=mono|c0=c{ch}"]) for ch, speaker in enumerate(SPEAKERS)]
+    elif os.path.isfile(path):
+        src, out, head = path, file_transcript_path(path), f"# {os.path.basename(path)}"
+        tracks = [(None, ["-map", "0:a:0", "-ac", "1"])]
+    else:
+        raise SystemExit(f"tapefront: no such file or directory: {path}")
     attempts = whisper_attempts(final_models(model), device)
     vad = os.environ.get(VAD_MODEL_ENV)
     if not vad or not os.path.isfile(vad):
@@ -453,20 +468,22 @@ def final(sdir, model, device):
 
     channels = []
     with tempfile.TemporaryDirectory(prefix="tapefront-") as tmp:
-        for ch, speaker in enumerate(SPEAKERS):
-            print(f"Final transcription: {speaker} (channel {ch + 1}/{len(SPEAKERS)})", flush=True)
-            wav = os.path.join(tmp, f"{speaker}.wav")
-            subprocess.run(
-                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", flac,
-                 "-af", f"pan=mono|c0=c{ch}", "-ar", "16000", wav],
-                check=True, preexec_fn=_die_with_parent,
+        for n, (speaker, pick) in enumerate(tracks, 1):
+            name = speaker or "audio"
+            print(f"Final transcription: {name} ({n}/{len(tracks)})", flush=True)
+            wav = os.path.join(tmp, f"{name}.wav")
+            res = subprocess.run(
+                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", src,
+                 *pick, "-ar", "16000", wav],
+                stderr=subprocess.PIPE, text=True, preexec_fn=_die_with_parent,
             )
-            data = whisper(attempts, vad, wav, os.path.join(tmp, speaker))
+            if res.returncode != 0:
+                raise SystemExit(f"tapefront: ffmpeg could not read audio from {src}:\n{res.stderr[-800:]}")
+            data = whisper(attempts, vad, wav, os.path.join(tmp, name))
             channels.append(parse_whisper_json(data, speaker))
 
-    lines = [flac_header(flac), ""]
+    lines = [head, ""]
     lines += [format_line(t, spk, text) for t, spk, text in merge_segments(*channels)]
-    out = os.path.join(sdir, "transcript.md")
     part = f"{out}.{os.getpid()}.tmp"  # unique per run (not NamedTemporaryFile: that would be 0600)
     with open(part, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -488,11 +505,12 @@ def main(argv=None):
     try:
         if argv[:1] == ["final"]:
             p = argparse.ArgumentParser(prog="tapefront final",
-                                        description="Run (or re-run) the final transcription of a session.")
-            p.add_argument("dir")
+                                        description="Run (or re-run) the final transcription of a session "
+                                                    "dir, or transcribe any audio/video file.")
+            p.add_argument("path", help="session dir, or an audio/video file")
             add_final_opts(p)
             a = p.parse_args(argv[1:])
-            return final(a.dir, a.model, a.device)
+            return final(a.path, a.model, a.device)
         if argv[:1] == ["_live"]:  # internal: the live worker
             p = argparse.ArgumentParser(prog="tapefront _live")
             p.add_argument("dir")
@@ -502,7 +520,7 @@ def main(argv=None):
             p.add_argument("--t0", type=float, required=True)
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
-                                    epilog="Subcommand: tapefront final DIR [--model PATH] [--device N]")
+                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N]")
         p.add_argument("--title", help="meeting title (also used in the folder name)")
         p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
         p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")
