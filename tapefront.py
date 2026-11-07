@@ -447,7 +447,10 @@ def whisper(attempts, vad, wav, base):
         where = "CPU" if dev is None else f"GPU {dev}"
         print(f"  {os.path.basename(model)} on {where}", flush=True)
         # VAD skips long silences, where whisper would otherwise hallucinate.
-        cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-oj", "-of", base, "--vad", "-vm", vad]
+        # -mc 0: don't feed the previous text back as context; with it, one
+        # repeated phrase can loop for the rest of the file.
+        cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-mc", "0", "-oj", "-of", base,
+               "--vad", "-vm", vad]
         cmd += ["-ng"] if dev is None else ["-dev", str(dev)]
         # Without this, ggml uploads the weights through host-visible VRAM, which
         # on NVIDIA takes ~5 min for the 3 GB full model (2-3 s with it).
