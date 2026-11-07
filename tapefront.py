@@ -416,8 +416,11 @@ def whisper(attempts, vad, wav, base):
         # VAD skips long silences, where whisper would otherwise hallucinate.
         cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-oj", "-of", base, "--vad", "-vm", vad]
         cmd += ["-ng"] if dev is None else ["-dev", str(dev)]
+        # Without this, ggml uploads the weights through host-visible VRAM, which
+        # on NVIDIA takes ~5 min for the 3 GB full model (2-3 s with it).
+        env = {"GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM": "1", **os.environ}
         res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                             preexec_fn=_die_with_parent)
+                             env=env, preexec_fn=_die_with_parent)
         if res.returncode == 0:
             break
         if len(attempts) == 1:
