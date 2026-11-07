@@ -2,6 +2,7 @@ import datetime
 import os
 import tempfile
 import json
+import subprocess
 import unittest
 from unittest import mock
 
@@ -218,12 +219,42 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual([c[c.index("-m") + 1] for c in calls], ["full", "q5", "q5"])
         self.assertEqual(attempts, [("q5", 1), ("q5", None)])
 
+    def test_language_reaches_whisper(self):
+        calls = []
+
+        def outcome(cmd):
+            calls.append(cmd)
+            with open(cmd[cmd.index("-of") + 1] + ".json", "w") as f:
+                json.dump({"transcription": []}, f)
+            return 0, []
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(tf.subprocess, "Popen", fake_popen(outcome)), \
+                mock.patch.object(tf, "final_models", return_value=["q5"]), mock.patch("builtins.print"), \
+                mock.patch.dict(os.environ, {tf.VAD_MODEL_ENV: __file__}):
+            wav = os.path.join(d, "call.wav")
+            with open(wav, "wb"):
+                pass
+            for argv in (["final", wav], ["final", wav, "--lang", "en"]):
+                with mock.patch.object(tf.subprocess, "run",
+                                       return_value=subprocess.CompletedProcess([], 0, stderr="")):
+                    tf.main(argv)
+        self.assertEqual([c[c.index("-l") + 1] for c in calls], ["auto", "en"])
+
     def test_last_attempt_failing_exits(self):
         fail = fake_popen(lambda cmd: (1, []))
         with mock.patch.object(tf.subprocess, "Popen", fail), mock.patch.object(tf, "warn"), \
                 mock.patch("builtins.print"), self.assertRaises(SystemExit) as e:
             tf.whisper(tf.whisper_attempts(["q5"], 1), "vad", "a.wav", "/nonexistent/x")
         self.assertIn("ErrorOutOfDeviceMemory", str(e.exception))
+
+    def test_no_transcript_exits_without_retrying(self):
+        # whisper-cli exits 0 without output for an unknown --lang
+        calls = []
+        with mock.patch.object(tf.subprocess, "Popen", fake_popen(lambda cmd: calls.append(cmd) or (0, []))), \
+                mock.patch("builtins.print"), self.assertRaises(SystemExit) as e:
+            tf.whisper(tf.whisper_attempts(["full", "q5"], 1), "vad", "a.wav", "/nonexistent/x", "xx")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("wrote no transcript", str(e.exception))
 
 
 class SessionDirTest(unittest.TestCase):

@@ -2,8 +2,8 @@
 """tapefront: record a meeting as one stereo FLAC (L = me/mic, R = them/system),
 with an optional live transcript and an accurate final pass with whisper.cpp.
 
-  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device N]
-  tapefront final DIR [--model PATH] [--device N]
+  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device N] [--lang LANG]
+  tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG]
 """
 
 import argparse
@@ -322,7 +322,7 @@ def record(args):
         except EOFError:
             answer = "n"
         if answer in ("", "y", "yes"):
-            return final(sdir, args.model, args.device)
+            return final(sdir, args.model, args.device, args.lang)
     print(f"Run later with: tapefront final {sdir}", flush=True)
     return 0
 
@@ -417,7 +417,7 @@ def flac_header(flac):
 
 def _run_whisper(cmd, env, wav):
     """Run whisper-cli, showing how far into the audio it is (on a TTY) from the
-    segments it prints as it goes. Returns (exit code, stderr tail)."""
+    segments it prints as it goes. Returns (exit code, stderr)."""
     tty = sys.stdout.isatty()
     try:
         with wave.open(wav) as w:
@@ -436,10 +436,10 @@ def _run_whisper(cmd, env, wav):
         if tty and total:
             print(flush=True)
         err.seek(0)
-        return rc, err.read()[-1500:]
+        return rc, err.read()
 
 
-def whisper(attempts, vad, wav, base):
+def whisper(attempts, vad, wav, base, lang="auto"):
     """Run whisper-cli down the `attempts` list until one works. Failed tries
     are dropped from the list, so the next channel starts where this one ended."""
     while True:
@@ -449,15 +449,21 @@ def whisper(attempts, vad, wav, base):
         # VAD skips long silences, where whisper would otherwise hallucinate.
         # -mc 0: don't feed the previous text back as context; with it, one
         # repeated phrase can loop for the rest of the file.
-        cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", "auto", "-mc", "0", "-oj", "-of", base,
+        cmd = ["whisper-cli", "-m", model, "-f", wav, "-l", lang, "-mc", "0", "-oj", "-of", base,
                "--vad", "-vm", vad]
         cmd += ["-ng"] if dev is None else ["-dev", str(dev)]
         # Without this, ggml uploads the weights through host-visible VRAM, which
         # on NVIDIA takes ~5 min for the 3 GB full model (2-3 s with it).
         env = {"GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM": "1", **os.environ}
         rc, err = _run_whisper(cmd, env, wav)
-        if rc == 0:
+        if rc == 0 and os.path.exists(base + ".json"):
             break
+        if rc == 0:
+            # whisper-cli exits 0 after an argument error, such as an unknown
+            # --lang; another model or device would hit it too.
+            errors = [l for l in err.splitlines() if l.startswith("error:")]
+            raise SystemExit("tapefront: whisper-cli wrote no transcript:\n" + ("\n".join(errors) or err[-1500:]))
+        err = err[-1500:]
         if len(attempts) == 1:
             raise SystemExit(f"tapefront: whisper-cli failed:\n{err}")
         warn(f"whisper-cli failed ({os.path.basename(model)} on {where}):\n{err}")
@@ -483,7 +489,7 @@ def final_models(model):
     return found
 
 
-def final(path, model, device):
+def final(path, model, device, lang="auto"):
     """Final transcript of a session dir (per channel, me/them) or of any
     audio/video file (downmixed to mono, no speaker labels)."""
     path = os.path.abspath(path)
@@ -517,7 +523,7 @@ def final(path, model, device):
             )
             if res.returncode != 0:
                 raise SystemExit(f"tapefront: ffmpeg could not read audio from {src}:\n{res.stderr[-800:]}")
-            data = whisper(attempts, vad, wav, os.path.join(tmp, name))
+            data = whisper(attempts, vad, wav, os.path.join(tmp, name), lang)
             channels.append(parse_whisper_json(data, speaker))
 
     lines = [head, ""]
@@ -536,6 +542,8 @@ def add_final_opts(p):
     p.add_argument("--model", help="whisper ggml model (default: full large-v3, else q5_0, "
                                    "from ~/.cache/nix-transcribe)")
     p.add_argument("--device", type=int, default=1, help="whisper GPU device index (default 1)")
+    p.add_argument("--lang", default="auto",
+                   help="spoken language, e.g. en or it (default: auto, guessed from the first 30 s)")
 
 
 def main(argv=None):
@@ -548,7 +556,7 @@ def main(argv=None):
             p.add_argument("path", help="session dir, or an audio/video file")
             add_final_opts(p)
             a = p.parse_args(argv[1:])
-            return final(a.path, a.model, a.device)
+            return final(a.path, a.model, a.device, a.lang)
         if argv[:1] == ["_live"]:  # internal: the live worker
             p = argparse.ArgumentParser(prog="tapefront _live")
             p.add_argument("dir")
@@ -558,7 +566,7 @@ def main(argv=None):
             p.add_argument("--t0", type=float, required=True)
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
-                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N]")
+                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG]")
         p.add_argument("--title", help="meeting title (also used in the folder name)")
         p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
         p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")
