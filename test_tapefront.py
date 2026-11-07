@@ -2,7 +2,6 @@ import datetime
 import os
 import tempfile
 import json
-import subprocess
 import unittest
 from unittest import mock
 
@@ -153,6 +152,20 @@ class LiveLinesTest(unittest.TestCase):
         self.assertEqual(b.update(" trailing wor", 4.2, final=True), (4.0, "trailing wor"))
 
 
+class FakeProc:
+    """Popen stand-in: `outcome(cmd)` returns (exit code, stdout lines)."""
+    def __init__(self, outcome, cmd, **kw):
+        self.rc, self.stdout = outcome(cmd)
+        kw["stderr"].write("" if self.rc == 0 else "ErrorOutOfDeviceMemory")
+
+    def wait(self):
+        return self.rc
+
+
+def fake_popen(outcome):
+    return lambda cmd, **kw: FakeProc(outcome, cmd, **kw)
+
+
 class WhisperTest(unittest.TestCase):
     def test_parse_and_merge(self):
         me = tf.parse_whisper_json({"transcription": [
@@ -178,22 +191,27 @@ class WhisperTest(unittest.TestCase):
                          [("full", 1), ("q5", 1), ("q5", None)])
         self.assertEqual(tf.whisper_attempts(["mine"], 0), [("mine", 0), ("mine", None)])
 
+    def test_segment_end(self):
+        self.assertEqual(tf.segment_end("[00:00:01.500 --> 01:02:03.250]   Hi all.\n"), 3723.25)
+        self.assertIsNone(tf.segment_end("whisper_print_timings: load time"))
+        self.assertIsNone(tf.segment_end("\n"))
+
     def test_file_transcript_path(self):
         self.assertEqual(tf.file_transcript_path("/r/call.m4a"), "/r/call.m4a.transcript.md")
 
     def test_failed_attempts_are_dropped_for_the_next_channel(self):
         calls = []
 
-        def fake_run(cmd, **kw):
+        def outcome(cmd):
             calls.append(cmd)
             if "full" in cmd:  # the full model never fits
-                return subprocess.CompletedProcess(cmd, 1, stderr="ErrorOutOfDeviceMemory")
+                return 1, []
             with open(cmd[cmd.index("-of") + 1] + ".json", "w") as f:
                 json.dump({"transcription": []}, f)
-            return subprocess.CompletedProcess(cmd, 0, stderr="")
+            return 0, ["[00:00:00.000 --> 00:00:02.000]   Hi.\n"]
 
         attempts = tf.whisper_attempts(["full", "q5"], 1)
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(tf.subprocess, "run", fake_run), \
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(tf.subprocess, "Popen", fake_popen(outcome)), \
                 mock.patch.object(tf, "warn"), mock.patch("builtins.print"):
             tf.whisper(attempts, "vad", "a.wav", os.path.join(d, "me"))
             tf.whisper(attempts, "vad", "b.wav", os.path.join(d, "them"))
@@ -201,10 +219,11 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual(attempts, [("q5", 1), ("q5", None)])
 
     def test_last_attempt_failing_exits(self):
-        fail = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, stderr="boom")
-        with mock.patch.object(tf.subprocess, "run", fail), mock.patch.object(tf, "warn"), \
-                mock.patch("builtins.print"), self.assertRaises(SystemExit):
+        fail = fake_popen(lambda cmd: (1, []))
+        with mock.patch.object(tf.subprocess, "Popen", fail), mock.patch.object(tf, "warn"), \
+                mock.patch("builtins.print"), self.assertRaises(SystemExit) as e:
             tf.whisper(tf.whisper_attempts(["q5"], 1), "vad", "a.wav", "/nonexistent/x")
+        self.assertIn("ErrorOutOfDeviceMemory", str(e.exception))
 
 
 class SessionDirTest(unittest.TestCase):

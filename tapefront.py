@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import wave
 from array import array
 
 SPEAKERS = ("me", "them")  # channel 0 (L) = mic, channel 1 (R) = system audio
@@ -36,6 +37,8 @@ SENTENCE_END = re.compile(r"[.?!](?=\s|$)|[。？！]")
 # Whitespace, or punctuation not starting a number (".5", ",000"), that must
 # not start a line (e.g. a sentence end arriving after an idle flush).
 LEADING_JUNK = re.compile(r"(?:\s|[.,;:?!。，？！](?!\d))*")
+# A segment line on whisper-cli's stdout: "[00:01:02.340 --> 00:01:05.000]  text"
+WHISPER_SEGMENT = re.compile(r"\[[\d:.]+ --> (\d+):(\d\d):(\d\d(?:\.\d+)?)\]")
 
 
 def warn(msg):
@@ -184,6 +187,12 @@ def whisper_attempts(models, device):
     """(model, GPU device or None for CPU) tries in order: each model on the
     GPU, then the last (smallest) one on the CPU."""
     return [(m, device) for m in models] + [(models[-1], None)]
+
+
+def segment_end(line):
+    """End time in seconds of a whisper-cli segment line, else None."""
+    m = WHISPER_SEGMENT.match(line)
+    return int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3]) if m else None
 
 
 def file_transcript_path(path):
@@ -406,6 +415,30 @@ def flac_header(flac):
     return header(tags.get("title"), tags.get("date", "unknown"))
 
 
+def _run_whisper(cmd, env, wav):
+    """Run whisper-cli, showing how far into the audio it is (on a TTY) from the
+    segments it prints as it goes. Returns (exit code, stderr tail)."""
+    tty = sys.stdout.isatty()
+    try:
+        with wave.open(wav) as w:
+            total = w.getnframes() / w.getframerate()
+    except (OSError, wave.Error):
+        total = 0
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as err:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, text=True, encoding="utf-8",
+                                errors="replace", env=env, preexec_fn=_die_with_parent)
+        for line in proc.stdout:
+            end = segment_end(line)
+            if tty and end is not None and total:
+                print(f"\r    {fmt_ts(end)} / {fmt_ts(total)} ({min(100, int(100 * end / total))}%)",
+                      end="", flush=True)
+        rc = proc.wait()
+        if tty and total:
+            print(flush=True)
+        err.seek(0)
+        return rc, err.read()[-1500:]
+
+
 def whisper(attempts, vad, wav, base):
     """Run whisper-cli down the `attempts` list until one works. Failed tries
     are dropped from the list, so the next channel starts where this one ended."""
@@ -419,13 +452,12 @@ def whisper(attempts, vad, wav, base):
         # Without this, ggml uploads the weights through host-visible VRAM, which
         # on NVIDIA takes ~5 min for the 3 GB full model (2-3 s with it).
         env = {"GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM": "1", **os.environ}
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                             env=env, preexec_fn=_die_with_parent)
-        if res.returncode == 0:
+        rc, err = _run_whisper(cmd, env, wav)
+        if rc == 0:
             break
         if len(attempts) == 1:
-            raise SystemExit(f"tapefront: whisper-cli failed:\n{res.stderr[-1500:]}")
-        warn(f"whisper-cli failed ({os.path.basename(model)} on {where}):\n{res.stderr[-1500:]}")
+            raise SystemExit(f"tapefront: whisper-cli failed:\n{err}")
+        warn(f"whisper-cli failed ({os.path.basename(model)} on {where}):\n{err}")
         attempts.pop(0)
     with open(base + ".json", encoding="utf-8", errors="replace") as f:
         return json.load(f)
