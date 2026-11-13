@@ -12,15 +12,15 @@ Summaries and speaker diarization are not part of the tool.
 ```sh
 tapefront --title "Weekly sync"     # record; Ctrl-C stops, then asks to run the final pass
 tapefront --no-live                 # record only
-tapefront final ~/Meetings/latest   # run (or re-run) the final transcription of a session
-tapefront final call.m4a            # transcribe any audio/video file -> call.m4a.transcript.md
+tapefront ~/Meetings/latest         # run (or re-run) the final transcription of a session
+tapefront call.m4a                  # transcribe any audio/video file -> call.m4a.transcript.md
 tapefront devices                   # list the GPUs whisper can use
 tapefront models                    # check which models are on disk (see Models)
 ```
 
-A file other than a session is downmixed to mono and transcribed once: its lines have timestamps but no
-`me:`/`them:` labels, since a random stereo recording doesn't split speakers by channel. Re-running replaces the
-transcript.
+With a path, tapefront transcribes instead of recording. A file other than a session is downmixed to mono and
+transcribed once: its lines have timestamps but no `me:`/`them:` labels, since a random stereo recording doesn't
+split speakers by channel. Re-running replaces the transcript.
 
 Options: `--out ROOT` (default `~/Meetings`), `--live-model PATH`, `--model PATH` (whisper model),
 `--device auto|cpu|N` (whisper GPU: by default the first discrete GPU, else the first GPU, else the CPU;

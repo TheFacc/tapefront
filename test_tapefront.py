@@ -254,7 +254,7 @@ class WhisperTest(unittest.TestCase):
             wav = os.path.join(d, "call.wav")
             with open(wav, "wb"):
                 pass
-            for argv in (["final", wav], ["final", wav, "--lang", "en"]):
+            for argv in ([wav], ["--lang", "en", wav]):
                 with mock.patch.object(tf.subprocess, "run",
                                        return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")):
                     tf.main(argv)
@@ -277,14 +277,21 @@ class WhisperTest(unittest.TestCase):
                                   return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")):
             with open(os.path.join(d, "audio.flac"), "wb"):
                 pass
-            tf.main(["final", d, "--only", "them"])
+            tf.main([d, "--only", "them"])
             with open(os.path.join(d, "transcript.md")) as f:
                 body = f.read()
             with self.assertRaises(SystemExit):
-                tf.main(["final", os.path.join(d, "audio.flac"), "--only", "them"])
+                tf.main([os.path.join(d, "audio.flac"), "--only", "them"])
         self.assertEqual(transcribed, ["them"])
         self.assertIn("them: hi", body)
         self.assertNotIn("me:", body)
+
+    def test_recording_flags_rejected_with_a_path(self):
+        with mock.patch.object(tf, "final") as final, mock.patch.object(tf, "record") as record, \
+                mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            tf.main(["call.m4a", "--title", "x"])
+        final.assert_not_called()
+        record.assert_not_called()
 
     def test_last_attempt_failing_exits(self):
         fail = fake_popen(lambda cmd: (1, []))

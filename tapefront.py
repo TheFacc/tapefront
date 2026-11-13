@@ -2,9 +2,10 @@
 """tapefront: record a meeting as one stereo FLAC (L = me/mic, R = them/system),
 with an optional live transcript and an accurate final pass with whisper.cpp.
 
-  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
-  tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
+  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [FINAL OPTIONS]   record
+  tapefront DIR|FILE [FINAL OPTIONS]      final pass of a session dir, or transcribe any audio/video file
   tapefront devices | models
+FINAL OPTIONS: [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
 """
 
 import argparse
@@ -22,6 +23,7 @@ import time
 import wave
 from array import array
 
+DEFAULT_OUT = "~/Meetings"
 SPEAKERS = ("me", "them")  # channel 0 (L) = mic, channel 1 (R) = system audio
 LIVE_RATE = 16000
 LIVE_CHUNK_BYTES = LIVE_RATE // 2 * 2 * 4  # 0.5 s of interleaved stereo float32
@@ -345,7 +347,7 @@ def list_models():
 # --- record (supervisor) ------------------------------------------------
 
 def record(args):
-    root = os.path.abspath(os.path.expanduser(args.out))
+    root = os.path.abspath(os.path.expanduser(args.out or DEFAULT_OUT))
     started = datetime.datetime.now()
     sdir = make_session_dir(root, session_name(started, args.title))
     point_latest(root, sdir)
@@ -361,7 +363,7 @@ def record(args):
     signal.signal(signal.SIGTERM, on_signal)
 
     flac = os.path.join(sdir, "audio.flac")
-    # Title and start time ride along as FLAC tags so `final` can rebuild the header.
+    # Title and start time ride along as FLAC tags so the final pass can rebuild the header.
     rec = subprocess.Popen(
         capture_cmd(48000, ["-c:a", "flac", "-metadata", f"title={args.title or ''}",
                             "-metadata", f"date={stamp}", flac]),
@@ -415,7 +417,7 @@ def record(args):
             answer = "n"
         if answer in ("", "y", "yes"):
             return final(sdir, args.model, args.device, args.lang, args.only)
-    print(f"Run later with: tapefront final {sdir}", flush=True)
+    print(f"Run later with: tapefront {sdir}", flush=True)
     return 0
 
 
@@ -635,8 +637,8 @@ def final(path, model, device, lang="auto", only=None):
 # --- CLI ----------------------------------------------------------------
 
 def add_final_opts(p):
-    p.add_argument("--model", help="whisper ggml model (default: full large-v3, else q5_0, "
-                                   "from ~/.cache/nix-transcribe)")
+    p.add_argument("--model", help="whisper ggml model (default: full large-v3, else q5_0; "
+                                   "see `tapefront models`)")
     p.add_argument("--device", type=device_arg, default="auto",
                    help="whisper GPU index from `tapefront devices`, or cpu (default: auto, the first discrete GPU)")
     p.add_argument("--lang", default="auto",
@@ -648,14 +650,6 @@ def add_final_opts(p):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
-        if argv[:1] == ["final"]:
-            p = argparse.ArgumentParser(prog="tapefront final",
-                                        description="Run (or re-run) the final transcription of a session "
-                                                    "dir, or transcribe any audio/video file.")
-            p.add_argument("path", help="session dir, or an audio/video file")
-            add_final_opts(p)
-            a = p.parse_args(argv[1:])
-            return final(a.path, a.model, a.device, a.lang, a.only)
         if argv[:1] == ["devices"]:
             return list_devices()
         if argv[:1] == ["models"]:
@@ -669,14 +663,22 @@ def main(argv=None):
             p.add_argument("--t0", type=float, required=True)
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
-                                    epilog="Subcommands: tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] "
-                                           "[--only me|them]; tapefront devices (list GPUs); tapefront models (check models)")
-        p.add_argument("--title", help="meeting title (also used in the folder name)")
-        p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
-        p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")
-        p.add_argument("--live-model", help="streaming transcribe.cpp model (default: Handy's Nemotron)")
-        add_final_opts(p)
-        return record(p.parse_args(argv))
+                                    epilog="Also: tapefront devices (list GPUs), tapefront models (check models)")
+        p.add_argument("path", nargs="?",
+                       help="session dir (re-run its final pass) or any audio/video file to transcribe; "
+                            "without it, tapefront records")
+        rec = p.add_argument_group("recording")
+        rec.add_argument("--title", help="meeting title (also used in the folder name)")
+        rec.add_argument("--no-live", action="store_true", help="record only, no live transcript")
+        rec.add_argument("--out", help=f"sessions root (default {DEFAULT_OUT})")
+        rec.add_argument("--live-model", help="streaming transcribe.cpp model (default: Handy's Nemotron)")
+        add_final_opts(p.add_argument_group("final pass"))
+        a = p.parse_args(argv)
+        if a.path is None:
+            return record(a)
+        if a.title or a.no_live or a.out or a.live_model:
+            p.error("--title, --no-live, --out and --live-model are for recording, not with a path")
+        return final(a.path, a.model, a.device, a.lang, a.only)
     except KeyboardInterrupt:
         print("\ninterrupted", file=sys.stderr)
         return 130
