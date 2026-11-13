@@ -1,5 +1,5 @@
 {
-  description = "tapefront: CLI meeting recorder (mic + system audio) with a live transcript";
+  description = "tapefront - Live Nix Notetaker: CLI meeting recorder (mic + system audio) with a live transcript";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -70,7 +70,10 @@
           python -m unittest -v test_tapefront
           runHook postCheck
         '';
-        meta.mainProgram = "tapefront";
+        meta = {
+          mainProgram = "tapefront";
+          license = pkgs.lib.licenses.mit;
+        };
       };
     in
     {

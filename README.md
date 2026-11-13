@@ -1,4 +1,4 @@
-# tapefront
+# tapefront - Live Nix Notetaker
 
 A small CLI meeting recorder. It records your mic and the system audio as the two channels of one stereo FLAC
 (L = me, R = them), writes a live transcript as the meeting goes, and at the end can run an accurate final
@@ -65,3 +65,7 @@ nix build    # also runs the unit tests
 
 The flake packages the transcribe.cpp release (prebuilt native libs, autopatchelf'd, and the Python binding),
 puts ffmpeg and whisper-cpp-vulkan on the wrapper's PATH and fetches the Silero VAD model. x86_64-linux only.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
