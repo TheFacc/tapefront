@@ -191,6 +191,26 @@ class WhisperTest(unittest.TestCase):
         self.assertEqual(tf.whisper_attempts(["full", "q5"], 1),
                          [("full", 1), ("q5", 1), ("q5", None)])
         self.assertEqual(tf.whisper_attempts(["mine"], 0), [("mine", 0), ("mine", None)])
+        self.assertEqual(tf.whisper_attempts(["full", "q5"], None), [("q5", None)])
+
+    def test_gpu_devices(self):
+        out = ("ggml_vulkan: Found 2 Vulkan devices:\n"
+               "ggml_vulkan: 0 = Intel(R) Graphics (ARL) (Intel open-source Mesa driver) | uma: 1 | fp16: 1\n"
+               "ggml_vulkan: 1 = NVIDIA RTX PRO 500 Laptop GPU (NVIDIA) | uma: 0 | fp16: 1\n"
+               "error: failed to initialize whisper context\n")
+        with mock.patch.object(tf.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 3, stdout="", stderr=out)):
+            devices = tf.gpu_devices()
+        self.assertEqual(devices, [(0, "Intel(R) Graphics (ARL) (Intel open-source Mesa driver)", True),
+                                   (1, "NVIDIA RTX PRO 500 Laptop GPU (NVIDIA)", False)])
+        self.assertEqual(tf.pick_device(devices), 1)
+        self.assertEqual(tf.pick_device(devices[:1]), 0)
+        self.assertIsNone(tf.pick_device([]))
+
+    def test_device_arg(self):
+        self.assertEqual([tf.device_arg(v) for v in ("auto", "cpu", "2")], ["auto", "cpu", 2])
+        with self.assertRaises(Exception):
+            tf.device_arg("nvidia")
 
     def test_segment_end(self):
         self.assertEqual(tf.segment_end("[00:00:01.500 --> 01:02:03.250]   Hi all.\n"), 3723.25)
@@ -236,7 +256,7 @@ class WhisperTest(unittest.TestCase):
                 pass
             for argv in (["final", wav], ["final", wav, "--lang", "en"]):
                 with mock.patch.object(tf.subprocess, "run",
-                                       return_value=subprocess.CompletedProcess([], 0, stderr="")):
+                                       return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")):
                     tf.main(argv)
         self.assertEqual([c[c.index("-l") + 1] for c in calls], ["auto", "en"])
 

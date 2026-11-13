@@ -14,15 +14,17 @@ tapefront --title "Weekly sync"     # record; Ctrl-C stops, then asks to run the
 tapefront --no-live                 # record only
 tapefront final ~/Meetings/latest   # run (or re-run) the final transcription of a session
 tapefront final call.m4a            # transcribe any audio/video file -> call.m4a.transcript.md
+tapefront devices                   # list the GPUs whisper can use
 ```
 
 A file other than a session is downmixed to mono and transcribed once: its lines have timestamps but no
 `me:`/`them:` labels, since a random stereo recording doesn't split speakers by channel. Re-running replaces the
 transcript.
 
-Options: `--out ROOT` (default `~/Meetings`), `--live-model PATH`, `--model PATH` (whisper model), `--device N`
-(whisper GPU index, default 1), `--lang LANG` (spoken language for the final pass, e.g. `en`; by default whisper
-guesses it from the first 30 s, and a wrong guess comes out translated into that language), `--only me|them`
+Options: `--out ROOT` (default `~/Meetings`), `--live-model PATH`, `--model PATH` (whisper model),
+`--device auto|cpu|N` (whisper GPU: by default the first discrete GPU, else the first GPU, else the CPU;
+`tapefront devices` shows the indexes), `--lang LANG` (spoken language for the final pass, e.g. `en`; by default
+whisper guesses it from the first 30 s, and a wrong guess comes out translated into that language), `--only me|them`
 (final pass of a session on one channel only, e.g. to skip a noisy or muted mic). The prompt only appears on a TTY;
 SIGTERM or a non-interactive run just stops.
 
@@ -44,7 +46,7 @@ Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest
 - **Final**: each channel is extracted and transcribed with `whisper-cli` (Silero VAD to skip silences), then merged
   into `transcript.md`. Models are tried in order: full large-v3 on the GPU, large-v3 q5_0 on the GPU (fits when
   something else holds most of the VRAM), then q5_0 on the CPU. A try that fails is skipped for the second channel
-  too. `--model PATH` uses only that model: GPU, then CPU.
+  too. `--model PATH` uses only that model: GPU, then CPU. With `--device cpu` (or no GPU) only the CPU try runs.
 
 Models are not downloaded at runtime. The live model comes from Handy's cache
 (`~/.cache/huggingface/hub/models--handy-computer--nemotron-3.5-asr-streaming-0.6b-gguf`). The whisper models live

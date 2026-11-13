@@ -2,8 +2,9 @@
 """tapefront: record a meeting as one stereo FLAC (L = me/mic, R = them/system),
 with an optional live transcript and an accurate final pass with whisper.cpp.
 
-  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device N] [--lang LANG] [--only me|them]
-  tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG] [--only me|them]
+  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
+  tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
+  tapefront devices
 """
 
 import argparse
@@ -186,7 +187,56 @@ def parse_whisper_json(data, speaker):
 def whisper_attempts(models, device):
     """(model, GPU device or None for CPU) tries in order: each model on the
     GPU, then the last (smallest) one on the CPU."""
-    return [(m, device) for m in models] + [(models[-1], None)]
+    gpu = [] if device is None else [(m, device) for m in models]
+    return gpu + [(models[-1], None)]
+
+
+# ggml's list of Vulkan devices, e.g. "ggml_vulkan: 1 = NVIDIA RTX ... | uma: 0 | ..."
+# (uma: 1 = integrated GPU sharing system memory).
+VK_DEVICE = re.compile(r"ggml_vulkan: (\d+) = (.+?) \| uma: (\d)")
+
+
+def gpu_devices():
+    """[(index, name, integrated)] of the GPUs whisper-cli can use, in its own
+    numbering. ggml prints them before opening the model, so a dummy model
+    gives the list in a fraction of a second."""
+    try:
+        res = subprocess.run(["whisper-cli", "-m", os.devnull, "-f", os.devnull],
+                             capture_output=True, text=True, errors="replace", timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [(int(m[1]), m[2], m[3] == "1") for m in VK_DEVICE.finditer(res.stdout + res.stderr)]
+
+
+def pick_device(devices):
+    """The first discrete GPU, else the first GPU, else None (CPU). whisper's
+    own default is device 0, which on laptops is usually the integrated one."""
+    for index, _, integrated in devices:
+        if not integrated:
+            return index
+    return devices[0][0] if devices else None
+
+
+def device_arg(value):
+    if value in ("auto", "cpu"):
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected auto, cpu or a GPU index (see: tapefront devices)")
+
+
+def list_devices():
+    devices = gpu_devices()
+    if not devices:
+        print("No GPU found: whisper runs on the CPU.")
+        return 0
+    auto = pick_device(devices)
+    for index, name, integrated in devices:
+        print(f"{index}  {name} ({'integrated' if integrated else 'discrete'})"
+              + ("  <- auto" if index == auto else ""))
+    print("Use one with --device N, or --device cpu.")
+    return 0
 
 
 def segment_end(line):
@@ -507,7 +557,10 @@ def final(path, model, device, lang="auto", only=None):
         tracks = [(None, ["-map", "0:a:0", "-ac", "1"])]
     else:
         raise SystemExit(f"tapefront: no such file or directory: {path}")
-    attempts = whisper_attempts(final_models(model), device)
+    models = final_models(model)
+    if device == "auto":
+        device = pick_device(gpu_devices())
+    attempts = whisper_attempts(models, None if device == "cpu" else device)
     vad = os.environ.get(VAD_MODEL_ENV)
     if not vad or not os.path.isfile(vad):
         raise SystemExit(f"tapefront: Silero VAD model not found: set {VAD_MODEL_ENV} "
@@ -544,7 +597,8 @@ def final(path, model, device, lang="auto", only=None):
 def add_final_opts(p):
     p.add_argument("--model", help="whisper ggml model (default: full large-v3, else q5_0, "
                                    "from ~/.cache/nix-transcribe)")
-    p.add_argument("--device", type=int, default=1, help="whisper GPU device index (default 1)")
+    p.add_argument("--device", type=device_arg, default="auto",
+                   help="whisper GPU index from `tapefront devices`, or cpu (default: auto, the first discrete GPU)")
     p.add_argument("--lang", default="auto",
                    help="spoken language, e.g. en or it (default: auto, guessed from the first 30 s)")
     p.add_argument("--only", choices=SPEAKERS,
@@ -562,6 +616,8 @@ def main(argv=None):
             add_final_opts(p)
             a = p.parse_args(argv[1:])
             return final(a.path, a.model, a.device, a.lang, a.only)
+        if argv[:1] == ["devices"]:
+            return list_devices()
         if argv[:1] == ["_live"]:  # internal: the live worker
             p = argparse.ArgumentParser(prog="tapefront _live")
             p.add_argument("dir")
@@ -571,7 +627,8 @@ def main(argv=None):
             p.add_argument("--t0", type=float, required=True)
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
-                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG] [--only me|them]")
+                                    epilog="Subcommands: tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] "
+                                           "[--only me|them]; tapefront devices (list GPUs)")
         p.add_argument("--title", help="meeting title (also used in the folder name)")
         p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
         p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")
