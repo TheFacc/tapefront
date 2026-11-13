@@ -316,17 +316,14 @@ class ModelLookupTest(unittest.TestCase):
         open(path, "w").close()
         return path
 
-    def test_hf_cache_and_old_dir(self):
+    def test_hf_cache(self):
         repo, name, _ = tf.FINAL_MODELS[1]
         with tempfile.TemporaryDirectory() as d, \
-                mock.patch.dict(os.environ, {"HF_HOME": d, tf.VAD_MODEL_ENV: ""}), \
-                mock.patch.object(tf, "FINAL_MODEL_DIR", os.path.join(d, "old")):
+                mock.patch.dict(os.environ, {"HF_HOME": d, tf.VAD_MODEL_ENV: ""}):
             self.assertIsNone(tf.find_model(tf.FINAL_MODELS[1]))
             hub = os.path.join(d, "hub", "models--" + repo.replace("/", "--"), "snapshots")
             cached = self.put(os.path.join(hub, "abc", name))
             self.assertEqual(tf.find_model(tf.FINAL_MODELS[1]), cached)
-            old = self.put(os.path.join(d, "old", name))
-            self.assertEqual(tf.find_model(tf.FINAL_MODELS[1]), old)
             vad = self.put(os.path.join(d, "hub", "models--ggml-org--whisper-vad", "snapshots", "x",
                                         tf.VAD_MODEL[1]))
             self.assertEqual(tf.find_model(tf.VAD_MODEL), vad)

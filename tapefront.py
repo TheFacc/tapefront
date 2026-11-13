@@ -35,7 +35,6 @@ LIVE_MODEL = ("handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
 # else q5_0 (fits beside other GPU users). Missing ones are skipped.
 FINAL_MODELS = (("ggerganov/whisper.cpp", "ggml-large-v3.bin", "3.1 GB, ~4 GB VRAM"),
                 ("ggerganov/whisper.cpp", "ggml-large-v3-q5_0.bin", "1.1 GB"))
-FINAL_MODEL_DIR = "~/.cache/nix-transcribe"  # also looked in, for older setups
 VAD_MODEL = ("ggml-org/whisper-vad", "ggml-silero-v5.1.2.bin", "1 MB")
 VAD_MODEL_ENV = "TAPEFRONT_VAD_MODEL"  # set by the Nix wrapper, else VAD_MODEL
 SENTENCE_END = re.compile(r"[.?!](?=\s|$)|[。？！]")
@@ -310,10 +309,6 @@ def hf_cache_file(repo, name):
 def find_model(spec):
     """Where a (repo, file, note) model is on disk, or None."""
     repo, name, _ = spec
-    if spec in FINAL_MODELS:
-        old = os.path.join(os.path.expanduser(FINAL_MODEL_DIR), name)
-        if os.path.isfile(old):
-            return old
     if spec == VAD_MODEL and os.path.isfile(os.environ.get(VAD_MODEL_ENV, "")):
         return os.environ[VAD_MODEL_ENV]
     return hf_cache_file(repo, name)
