@@ -15,14 +15,14 @@ Point Claude Code, Codex or any assistant that can read files at `~/Meetings/lat
 whisper.cpp pass and writes `transcript.md` next to it. It can also transcribe any audio or video file offline.
 
 tapefront records your mic and the system audio as separate channels, so lines say `me:` or `them:`. It doesn't
-tell the other speakers apart and doesn't write summaries; leave that to the LLM.
+tell the other speakers apart and doesn't write summaries; leave that to the LLMs, they're scarily smart.
 
 I wrote it because [tapeback](https://github.com/yastcher/tapeback), a fuller Linux recorder with speaker
 diarization, transcribes live in 60-second batches, only when you turn that on, and its README doesn't describe a
 live file another tool can read. tapefront streams each channel and appends every sentence to `live.md` as soon
-as it ends.
+as it ends. And is overall much simpler for my use.
 
-## Get it
+## Installation
 
 tapefront needs Linux with PipeWire or PulseAudio. With Nix, try it without installing anything:
 
