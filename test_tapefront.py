@@ -240,6 +240,32 @@ class WhisperTest(unittest.TestCase):
                     tf.main(argv)
         self.assertEqual([c[c.index("-l") + 1] for c in calls], ["auto", "en"])
 
+    def test_only_one_channel(self):
+        transcribed = []
+
+        def outcome(cmd):
+            base = cmd[cmd.index("-of") + 1]
+            transcribed.append(os.path.basename(base))
+            with open(base + ".json", "w") as f:
+                json.dump({"transcription": [{"offsets": {"from": 0}, "text": "hi"}]}, f)
+            return 0, []
+
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(tf.subprocess, "Popen", fake_popen(outcome)), \
+                mock.patch.object(tf, "final_models", return_value=["q5"]), mock.patch("builtins.print"), \
+                mock.patch.dict(os.environ, {tf.VAD_MODEL_ENV: __file__}), \
+                mock.patch.object(tf.subprocess, "run",
+                                  return_value=subprocess.CompletedProcess([], 0, stdout="", stderr="")):
+            with open(os.path.join(d, "audio.flac"), "wb"):
+                pass
+            tf.main(["final", d, "--only", "them"])
+            with open(os.path.join(d, "transcript.md")) as f:
+                body = f.read()
+            with self.assertRaises(SystemExit):
+                tf.main(["final", os.path.join(d, "audio.flac"), "--only", "them"])
+        self.assertEqual(transcribed, ["them"])
+        self.assertIn("them: hi", body)
+        self.assertNotIn("me:", body)
+
     def test_last_attempt_failing_exits(self):
         fail = fake_popen(lambda cmd: (1, []))
         with mock.patch.object(tf.subprocess, "Popen", fail), mock.patch.object(tf, "warn"), \

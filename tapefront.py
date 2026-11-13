@@ -2,8 +2,8 @@
 """tapefront: record a meeting as one stereo FLAC (L = me/mic, R = them/system),
 with an optional live transcript and an accurate final pass with whisper.cpp.
 
-  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device N] [--lang LANG]
-  tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG]
+  tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device N] [--lang LANG] [--only me|them]
+  tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG] [--only me|them]
 """
 
 import argparse
@@ -322,7 +322,7 @@ def record(args):
         except EOFError:
             answer = "n"
         if answer in ("", "y", "yes"):
-            return final(sdir, args.model, args.device, args.lang)
+            return final(sdir, args.model, args.device, args.lang, args.only)
     print(f"Run later with: tapefront final {sdir}", flush=True)
     return 0
 
@@ -489,16 +489,19 @@ def final_models(model):
     return found
 
 
-def final(path, model, device, lang="auto"):
-    """Final transcript of a session dir (per channel, me/them) or of any
-    audio/video file (downmixed to mono, no speaker labels)."""
+def final(path, model, device, lang="auto", only=None):
+    """Final transcript of a session dir (per channel, me/them, or just the
+    `only` one) or of any audio/video file (downmixed to mono, no speaker labels)."""
     path = os.path.abspath(path)
     if os.path.isdir(path):
         src = os.path.join(path, "audio.flac")
         if not os.path.isfile(src):
             raise SystemExit(f"tapefront: no audio.flac in {path}")
         out, head = os.path.join(path, "transcript.md"), flac_header(src)
-        tracks = [(speaker, ["-af", f"pan=mono|c0=c{ch}"]) for ch, speaker in enumerate(SPEAKERS)]
+        tracks = [(speaker, ["-af", f"pan=mono|c0=c{ch}"]) for ch, speaker in enumerate(SPEAKERS)
+                  if only in (None, speaker)]
+    elif only:
+        raise SystemExit("tapefront: --only works on session dirs, not on a single file")
     elif os.path.isfile(path):
         src, out, head = path, file_transcript_path(path), f"# {os.path.basename(path)}"
         tracks = [(None, ["-map", "0:a:0", "-ac", "1"])]
@@ -544,6 +547,8 @@ def add_final_opts(p):
     p.add_argument("--device", type=int, default=1, help="whisper GPU device index (default 1)")
     p.add_argument("--lang", default="auto",
                    help="spoken language, e.g. en or it (default: auto, guessed from the first 30 s)")
+    p.add_argument("--only", choices=SPEAKERS,
+                   help="transcribe only this channel of a session: me (mic) or them (system audio)")
 
 
 def main(argv=None):
@@ -556,7 +561,7 @@ def main(argv=None):
             p.add_argument("path", help="session dir, or an audio/video file")
             add_final_opts(p)
             a = p.parse_args(argv[1:])
-            return final(a.path, a.model, a.device, a.lang)
+            return final(a.path, a.model, a.device, a.lang, a.only)
         if argv[:1] == ["_live"]:  # internal: the live worker
             p = argparse.ArgumentParser(prog="tapefront _live")
             p.add_argument("dir")
@@ -566,7 +571,7 @@ def main(argv=None):
             p.add_argument("--t0", type=float, required=True)
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
-                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG]")
+                                    epilog="Subcommand: tapefront final DIR|FILE [--model PATH] [--device N] [--lang LANG] [--only me|them]")
         p.add_argument("--title", help="meeting title (also used in the folder name)")
         p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
         p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")

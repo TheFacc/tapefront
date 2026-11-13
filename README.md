@@ -22,8 +22,9 @@ transcript.
 
 Options: `--out ROOT` (default `~/Meetings`), `--live-model PATH`, `--model PATH` (whisper model), `--device N`
 (whisper GPU index, default 1), `--lang LANG` (spoken language for the final pass, e.g. `en`; by default whisper
-guesses it from the first 30 s, and a wrong guess comes out translated into that language). The prompt only appears
-on a TTY; SIGTERM or a non-interactive run just stops.
+guesses it from the first 30 s, and a wrong guess comes out translated into that language), `--only me|them`
+(final pass of a session on one channel only, e.g. to skip a noisy or muted mic). The prompt only appears on a TTY;
+SIGTERM or a non-interactive run just stops.
 
 Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest` points at the newest one:
 
