@@ -1,5 +1,5 @@
 {
-  description = "tapefront: meeting recorder that writes a live Markdown transcript your LLM can read";
+  description = "tapefront: live meeting notes your LLM can read";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

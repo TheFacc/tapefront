@@ -1,4 +1,4 @@
-# tapefront
+# tapefront: live meeting notes your LLM can read
 
 A meeting recorder for Linux that writes the transcript to a Markdown file while the meeting is still going, so
 any LLM can read it.
@@ -10,8 +10,8 @@ $ tail -3 ~/Meetings/latest/live.md
 [00:12:14] them: and we still need someone for the on-call rota
 ```
 
-Point Claude Code, Codex or any assistant that can read files at `~/Meetings/latest/live.md` and ask "what did I miss in the last 5
-minutes?" or "what was I asked to do?" mid-meeting. When the meeting ends, tapefront runs a slower, more accurate
+Point Claude Code, Codex or any assistant that can read files at `~/Meetings/latest/live.md` and ask
+"what did I miss in the last 5 minutes?" or "what was I asked to do?" mid-meeting. When the meeting ends, tapefront runs a slower, more accurate
 whisper.cpp pass and writes `transcript.md` next to it. It can also transcribe any audio or video file offline.
 
 tapefront records your mic and the system audio as separate channels, so lines say `me:` or `them:`. It doesn't
@@ -22,18 +22,26 @@ diarization, transcribes live in 60-second batches, only when you turn that on, 
 live file another tool can read. tapefront streams each channel and appends every sentence to `live.md` as soon
 as it ends.
 
-## Install
+## Get it
 
-tapefront needs Linux with PipeWire or PulseAudio.
-
-With Nix, from a clone of this repo:
+tapefront needs Linux with PipeWire or PulseAudio. With Nix, try it without installing anything:
 
 ```sh
-nix run . -- --title "Weekly sync"
-nix profile install .
+nix run github:TheFacc/tapefront -- --title "Weekly sync"
 ```
 
-The flake brings everything except the models (see [Models](#models)). It builds for x86_64-linux only.
+To keep it, add the flake to your NixOS or Home Manager config:
+
+```nix
+# flake.nix
+inputs.tapefront.url = "github:TheFacc/tapefront";
+
+# a NixOS module (or home.packages in Home Manager)
+environment.systemPackages = [ inputs.tapefront.packages.x86_64-linux.default ];
+```
+
+The flake brings ffmpeg, whisper.cpp with Vulkan and the live transcription library. You only fetch the models
+(see [Models](#models)). It builds for x86_64-linux only.
 
 Without Nix it should work on any distro, but nobody has tested that yet. You need:
 
@@ -42,7 +50,7 @@ Without Nix it should work on any distro, but nobody has tested that yet. You ne
 - `pip install transcribe-cpp` for the live transcript (without it, tapefront records and skips the live part);
 - the models, including the Silero VAD model (see [Models](#models)).
 
-Then run `./tapefront.py` instead of `tapefront`.
+Then run `./tapefront.py` from a clone instead of `tapefront`.
 
 ## Record a meeting
 
@@ -75,13 +83,14 @@ Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest
 ## Transcribe a file
 
 ```sh
-tapefront ~/Meetings/latest        # a session: writes its transcript.md, with me:/them: lines
-tapefront call.m4a                 # any audio/video file: writes call.m4a.transcript.md
+tapefront ~/Meetings/latest        # a session folder: writes its transcript.md, with me:/them: lines
+tapefront call.m4a                 # any other audio/video file: writes call.m4a.transcript.md
 tapefront call.m4a --lang en
 ```
 
-tapefront mixes any other file down to mono, so its lines have timestamps but no `me:`/`them:` labels. Running it
-again replaces the transcript.
+Only a session folder keeps the two channels apart, because only there tapefront knows that left is your mic and
+right is everyone else. Pass the folder, not the `audio.flac` inside it. Any other file, stereo or not, gets mixed
+down to mono, so its lines have timestamps but no `me:`/`them:` labels. Running it again replaces the transcript.
 
 | Option | What it does |
 |---|---|
