@@ -4,7 +4,7 @@ with an optional live transcript and an accurate final pass with whisper.cpp.
 
   tapefront [--title T] [--no-live] [--out ROOT] [--live-model PATH] [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
   tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] [--only me|them]
-  tapefront devices
+  tapefront devices | models
 """
 
 import argparse
@@ -25,15 +25,17 @@ from array import array
 SPEAKERS = ("me", "them")  # channel 0 (L) = mic, channel 1 (R) = system audio
 LIVE_RATE = 16000
 LIVE_CHUNK_BYTES = LIVE_RATE // 2 * 2 * 4  # 0.5 s of interleaved stereo float32
-LIVE_MODEL_GLOB = (
-    "~/.cache/huggingface/hub/models--handy-computer--nemotron-3.5-asr-streaming-0.6b-gguf"
-    "/snapshots/*/nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf"
-)
+# Models are looked up in the Hugging Face cache, where `hf download REPO FILE`
+# puts them (Handy downloads the live model there too): (repo, file, note).
+LIVE_MODEL = ("handy-computer/nemotron-3.5-asr-streaming-0.6b-gguf",
+              "nemotron-3.5-asr-streaming-0.6b-Q8_0.gguf", "0.7 GB")
 # Default whisper models, best first: full large-v3 when it fits on the GPU,
 # else q5_0 (fits beside other GPU users). Missing ones are skipped.
-FINAL_MODELS = ("~/.cache/nix-transcribe/ggml-large-v3.bin",
-                "~/.cache/nix-transcribe/ggml-large-v3-q5_0.bin")
-VAD_MODEL_ENV = "TAPEFRONT_VAD_MODEL"  # set by the Nix wrapper
+FINAL_MODELS = (("ggerganov/whisper.cpp", "ggml-large-v3.bin", "3.1 GB, ~4 GB VRAM"),
+                ("ggerganov/whisper.cpp", "ggml-large-v3-q5_0.bin", "1.1 GB"))
+FINAL_MODEL_DIR = "~/.cache/nix-transcribe"  # also looked in, for older setups
+VAD_MODEL = ("ggml-org/whisper-vad", "ggml-silero-v5.1.2.bin", "1 MB")
+VAD_MODEL_ENV = "TAPEFRONT_VAD_MODEL"  # set by the Nix wrapper, else VAD_MODEL
 SENTENCE_END = re.compile(r"[.?!](?=\s|$)|[。？！]")
 # Whitespace, or punctuation not starting a number (".5", ",000"), that must
 # not start a line (e.g. a sentence end arriving after an idle flush).
@@ -293,11 +295,51 @@ def stop_child(proc, sig, timeout):
             proc.wait()
 
 
+def hf_cache_file(repo, name):
+    """`name` from `repo` in the Hugging Face cache (newest snapshot), or None."""
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(
+        os.environ.get("HF_HOME") or os.path.join(os.environ.get("XDG_CACHE_HOME") or "~/.cache", "huggingface"),
+        "hub")
+    pattern = os.path.join(os.path.expanduser(hub), "models--" + repo.replace("/", "--"), "snapshots", "*", name)
+    hits = sorted(glob.glob(pattern), key=os.path.getmtime)
+    return hits[-1] if hits else None
+
+
+def find_model(spec):
+    """Where a (repo, file, note) model is on disk, or None."""
+    repo, name, _ = spec
+    if spec in FINAL_MODELS:
+        old = os.path.join(os.path.expanduser(FINAL_MODEL_DIR), name)
+        if os.path.isfile(old):
+            return old
+    if spec == VAD_MODEL and os.path.isfile(os.environ.get(VAD_MODEL_ENV, "")):
+        return os.environ[VAD_MODEL_ENV]
+    return hf_cache_file(repo, name)
+
+
 def find_live_model(path):
     if path:
         return os.path.expanduser(path) if os.path.isfile(os.path.expanduser(path)) else None
-    hits = sorted(glob.glob(os.path.expanduser(LIVE_MODEL_GLOB)))
-    return hits[-1] if hits else None
+    return find_model(LIVE_MODEL)
+
+
+def list_models():
+    """Show which models are on disk, and how to get the missing ones."""
+    missing = []
+    for title, specs in (("Live transcript", [LIVE_MODEL]),
+                         ("Final pass (whisper, best first; one is enough)", FINAL_MODELS),
+                         ("Final pass, silence detection (needed)", [VAD_MODEL])):
+        print(title + ":")
+        for spec in specs:
+            path = find_model(spec)
+            print(f"  {'found  ' if path else 'missing'}  {spec[1]} ({spec[2]})" + (f"\n           {path}" if path else ""))
+            if not path:
+                missing.append(spec)
+    if missing:
+        print("\nGet the missing ones (into the Hugging Face cache) with the hf CLI from huggingface_hub:")
+        for repo, name, _ in missing:
+            print(f"  hf download {repo} {name}")
+    return 0
 
 
 # --- record (supervisor) ------------------------------------------------
@@ -529,13 +571,12 @@ def final_models(model):
         if not os.path.isfile(model):
             raise SystemExit(f"tapefront: whisper model not found: {model}")
         return [model]
-    paths = [os.path.expanduser(m) for m in FINAL_MODELS]
-    found = [m for m in paths if os.path.isfile(m)]
+    found = [path for path in map(find_model, FINAL_MODELS) if path]
     if not found:
-        raise SystemExit("tapefront: no whisper model found; download one (see README) to "
-                         + " or ".join(paths) + ", or pass --model PATH")
-    if paths[0] not in found:
-        warn(f"full large-v3 not found at {paths[0]} (see README), using {os.path.basename(found[0])}")
+        raise SystemExit("tapefront: no whisper model found; `tapefront models` shows how to get one, "
+                         "or pass --model PATH")
+    if not find_model(FINAL_MODELS[0]):
+        warn(f"full large-v3 not found (see `tapefront models`), using {os.path.basename(found[0])}")
     return found
 
 
@@ -561,10 +602,9 @@ def final(path, model, device, lang="auto", only=None):
     if device == "auto":
         device = pick_device(gpu_devices())
     attempts = whisper_attempts(models, None if device == "cpu" else device)
-    vad = os.environ.get(VAD_MODEL_ENV)
-    if not vad or not os.path.isfile(vad):
-        raise SystemExit(f"tapefront: Silero VAD model not found: set {VAD_MODEL_ENV} "
-                         "(the Nix wrapper does) to a ggml-silero-*.bin")
+    vad = find_model(VAD_MODEL)
+    if not vad:
+        raise SystemExit("tapefront: Silero VAD model not found; `tapefront models` shows how to get it")
 
     channels = []
     with tempfile.TemporaryDirectory(prefix="tapefront-") as tmp:
@@ -618,6 +658,8 @@ def main(argv=None):
             return final(a.path, a.model, a.device, a.lang, a.only)
         if argv[:1] == ["devices"]:
             return list_devices()
+        if argv[:1] == ["models"]:
+            return list_models()
         if argv[:1] == ["_live"]:  # internal: the live worker
             p = argparse.ArgumentParser(prog="tapefront _live")
             p.add_argument("dir")
@@ -628,7 +670,7 @@ def main(argv=None):
             return live_worker(p.parse_args(argv[1:]))
         p = argparse.ArgumentParser(prog="tapefront", description=__doc__.split("\n\n")[0],
                                     epilog="Subcommands: tapefront final DIR|FILE [--model PATH] [--device auto|cpu|N] [--lang LANG] "
-                                           "[--only me|them]; tapefront devices (list GPUs)")
+                                           "[--only me|them]; tapefront devices (list GPUs); tapefront models (check models)")
         p.add_argument("--title", help="meeting title (also used in the folder name)")
         p.add_argument("--no-live", action="store_true", help="record only, no live transcript")
         p.add_argument("--out", default="~/Meetings", help="sessions root (default ~/Meetings)")

@@ -303,6 +303,30 @@ class WhisperTest(unittest.TestCase):
         self.assertIn("wrote no transcript", str(e.exception))
 
 
+class ModelLookupTest(unittest.TestCase):
+    def put(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").close()
+        return path
+
+    def test_hf_cache_and_old_dir(self):
+        repo, name, _ = tf.FINAL_MODELS[1]
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"HF_HOME": d, tf.VAD_MODEL_ENV: ""}), \
+                mock.patch.object(tf, "FINAL_MODEL_DIR", os.path.join(d, "old")):
+            self.assertIsNone(tf.find_model(tf.FINAL_MODELS[1]))
+            hub = os.path.join(d, "hub", "models--" + repo.replace("/", "--"), "snapshots")
+            cached = self.put(os.path.join(hub, "abc", name))
+            self.assertEqual(tf.find_model(tf.FINAL_MODELS[1]), cached)
+            old = self.put(os.path.join(d, "old", name))
+            self.assertEqual(tf.find_model(tf.FINAL_MODELS[1]), old)
+            vad = self.put(os.path.join(d, "hub", "models--ggml-org--whisper-vad", "snapshots", "x",
+                                        tf.VAD_MODEL[1]))
+            self.assertEqual(tf.find_model(tf.VAD_MODEL), vad)
+            with mock.patch.dict(os.environ, {tf.VAD_MODEL_ENV: __file__}):
+                self.assertEqual(tf.find_model(tf.VAD_MODEL), __file__)
+
+
 class SessionDirTest(unittest.TestCase):
     def test_name(self):
         t = datetime.datetime(2026, 11, 4, 9, 5)
