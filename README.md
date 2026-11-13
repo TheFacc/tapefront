@@ -1,33 +1,35 @@
 # tapefront - Live Nix Notetaker
 
-A small CLI meeting recorder. It records your mic and the system audio as the two channels of one stereo FLAC
-(L = me, R = them), writes a live transcript as the meeting goes, and at the end can run an accurate final
-transcription with whisper.cpp.
+A small CLI meeting notetaker for Linux, with two uses:
+
+- **Record** a meeting: your mic and the system audio go into the two channels of one stereo FLAC (L = me,
+  R = them), with an optional live transcript as the meeting goes and an accurate final transcription with
+  whisper.cpp at the end.
+- **Transcribe** an earlier session, or any audio/video file, offline.
 
 The live transcript is a plain file, so you can ask an assistant "what did I miss in the last 5 minutes" at any time.
 Summaries and speaker diarization are not part of the tool.
 
-## Usage
+## Record a meeting
 
 ```sh
-tapefront --title "Weekly sync"     # record; Ctrl-C stops, then asks to run the final pass
-tapefront --no-live                 # record only
-tapefront ~/Meetings/latest         # run (or re-run) the final transcription of a session
-tapefront call.m4a                  # transcribe any audio/video file -> call.m4a.transcript.md
-tapefront devices                   # list the GPUs whisper can use
-tapefront models                    # check which models are on disk (see Models)
+tapefront                          # record, with a live transcript
+tapefront --title "Weekly sync"    # same, with a title
+tapefront --no-live                # record only
 ```
 
-With a path, tapefront transcribes instead of recording. A file other than a session is downmixed to mono and
-transcribed once: its lines have timestamps but no `me:`/`them:` labels, since a random stereo recording doesn't
-split speakers by channel. Re-running replaces the transcript.
+Ctrl-C stops the recording and asks whether to run the final transcription now. You can also run it later with
+`tapefront ~/Meetings/latest` (see below). The question only appears on a TTY; SIGTERM or a non-interactive run
+just stops.
 
-Options: `--out ROOT` (default `~/Meetings`), `--live-model PATH`, `--model PATH` (whisper model),
-`--device auto|cpu|N` (whisper GPU: by default the first discrete GPU, else the first GPU, else the CPU;
-`tapefront devices` shows the indexes), `--lang LANG` (spoken language for the final pass, e.g. `en`; by default
-whisper guesses it from the first 30 s, and a wrong guess comes out translated into that language), `--only me|them`
-(final pass of a session on one channel only, e.g. to skip a noisy or muted mic). The prompt only appears on a TTY;
-SIGTERM or a non-interactive run just stops.
+| Option | What it does |
+|---|---|
+| `--title T` | meeting title, also used in the folder name |
+| `--no-live` | no live transcript, record only |
+| `--out ROOT` | where sessions go (default `~/Meetings`) |
+| `--live-model PATH` | another streaming model for the live transcript |
+
+The transcription options below also apply to the final pass offered at the end.
 
 Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest` points at the newest one:
 
@@ -36,6 +38,31 @@ Each session gets a folder `ROOT/YYYY-MM-DD_HHMM[_title-slug]`, and `ROOT/latest
 | `audio.flac` | stereo, L = mic (me), R = system audio (them); stays readable even if the process is killed |
 | `live.md` | live transcript, one line per sentence: `[00:12:05] them: text` |
 | `transcript.md` | final transcript, same format, both channels merged by time |
+
+## Transcribe a file
+
+```sh
+tapefront ~/Meetings/latest        # a session: writes its transcript.md, with me:/them: lines
+tapefront call.m4a                 # any audio/video file: writes call.m4a.transcript.md
+tapefront call.m4a --lang en
+```
+
+A file other than a session is downmixed to mono, so its lines have timestamps but no `me:`/`them:` labels.
+Re-running replaces the transcript.
+
+| Option | What it does |
+|---|---|
+| `--lang LANG` | spoken language, e.g. `en` or `it`. Default `auto`: whisper guesses from the first 30 s, and a wrong guess comes out translated into that language |
+| `--only me\|them` | sessions only: transcribe just one channel, e.g. to skip a muted or noisy mic |
+| `--device auto\|cpu\|N` | where whisper runs. `auto` takes the first discrete GPU, else the first GPU, else the CPU; `tapefront devices` lists the indexes |
+| `--model PATH` | use only this whisper model (default: full large-v3, else q5_0) |
+
+## Tools
+
+```sh
+tapefront devices                  # GPUs whisper can use, and which one --device auto picks
+tapefront models                   # which models are on disk, and how to get the missing ones
+```
 
 ## How it works
 
@@ -62,11 +89,12 @@ hf download ggerganov/whisper.cpp ggml-large-v3.bin       # final, 3.1 GB, ~4 GB
 hf download ggerganov/whisper.cpp ggml-large-v3-q5_0.bin  # final, 1.1 GB
 ```
 
-`hf` comes with `huggingface_hub` (`pipx install huggingface_hub`, or
-`nix shell nixpkgs#python3Packages.huggingface-hub`). One whisper model is enough: without the full one the final
-pass uses q5_0. Without the live model, tapefront records without a live transcript. Whisper models in
-`~/.cache/nix-transcribe/` are picked up too. The Nix package brings the Silero VAD model; elsewhere get it with
-`hf download ggml-org/whisper-vad ggml-silero-v5.1.2.bin` (or point `TAPEFRONT_VAD_MODEL` at it).
+- `hf` comes with `huggingface_hub`: `pipx install huggingface_hub`, or
+  `nix shell nixpkgs#python3Packages.huggingface-hub`.
+- One whisper model is enough: without the full one, the final pass uses q5_0.
+- Without the live model, tapefront records without a live transcript.
+- The Nix package brings the Silero VAD model (silence detection). Elsewhere get it with
+  `hf download ggml-org/whisper-vad ggml-silero-v5.1.2.bin`, or point `TAPEFRONT_VAD_MODEL` at it.
 
 ## Nix
 
