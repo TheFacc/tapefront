@@ -1,5 +1,5 @@
 {
-  description = "tapefront - Live Nix Notetaker: CLI meeting recorder (mic + system audio) with a live transcript";
+  description = "tapefront: meeting recorder that writes a live Markdown transcript your LLM can read";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
